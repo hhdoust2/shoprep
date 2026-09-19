@@ -80,11 +80,55 @@ const SCHEMA_STATEMENTS = [
   `INSERT OR IGNORE INTO login_state (id, failed_count, locked_until) VALUES (1, 0, NULL)`,
 ];
 
+// فقط برای عیب‌یابی: وقتی Turso خطا می‌دهد، همان درخواست ساده را مستقیم می‌فرستیم
+// تا کد و متن جواب واقعی سرور (بدون هیچ راز) در لاگ‌های Vercel دیده شود.
+async function debugPipeline(): Promise<void> {
+  try {
+    const rawUrl = cleanEnv(process.env.TURSO_DATABASE_URL) ?? "";
+    const token = cleanEnv(process.env.TURSO_AUTH_TOKEN) ?? "";
+    const base = rawUrl.replace(/^libsql:/, "https:").replace(/\/+$/, "");
+    const res = await fetch(`${base}/v2/pipeline`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requests: [
+          { type: "execute", stmt: { sql: "SELECT 1" } },
+          { type: "close" },
+        ],
+      }),
+    });
+    const text = (await res.text()).slice(0, 300);
+    console.error("[db-debug] status=%s body=%s", res.status, text);
+  } catch (e) {
+    console.error(
+      "[db-debug] fetch failed:",
+      e instanceof Error ? e.message : String(e)
+    );
+  }
+}
+
+// دستورها را یکی‌یکی اجرا می‌کنیم (نه در یک batch/تراکنش)؛ همه idempotent هستند.
+// اگر خطا بدهد، نتیجه‌ی ناموفق کش نمی‌شود تا درخواست بعدی دوباره تلاش کند.
 export function ensureSchema(): Promise<void> {
   if (!global.__panelSchemaReady) {
-    global.__panelSchemaReady = db
-      .batch(SCHEMA_STATEMENTS, "write")
-      .then(() => undefined);
+    global.__panelSchemaReady = (async () => {
+      try {
+        for (const sql of SCHEMA_STATEMENTS) {
+          await db.execute(sql);
+        }
+      } catch (err) {
+        global.__panelSchemaReady = undefined;
+        console.error(
+          "[db] schema setup failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+        await debugPipeline();
+        throw err;
+      }
+    })();
   }
   return global.__panelSchemaReady;
 }
