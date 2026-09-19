@@ -62,7 +62,7 @@ export async function verifySessionValue(
     const valid = await crypto.subtle.verify(
       "HMAC",
       key,
-      fromHex(signatureHex),
+      fromHex(signatureHex) as BufferSource,
       enc.encode(payload)
     );
     if (!valid) return false;
