@@ -80,34 +80,54 @@ const SCHEMA_STATEMENTS = [
   `INSERT OR IGNORE INTO login_state (id, failed_count, locked_until) VALUES (1, 0, NULL)`,
 ];
 
-// فقط برای عیب‌یابی: وقتی Turso خطا می‌دهد، همان درخواست ساده را مستقیم می‌فرستیم
-// تا کد و متن جواب واقعی سرور (بدون هیچ راز) در لاگ‌های Vercel دیده شود.
-async function debugPipeline(): Promise<void> {
+// فقط برای عیب‌یابی: وقتی Turso خطا می‌دهد، چند درخواست ساده‌ی مستقیم می‌فرستیم
+// تا کد و متن جواب واقعی سرور در لاگ‌های Vercel دیده شود. هیچ توکنی چاپ نمی‌شود.
+async function probe(label: string, url: string, init: RequestInit): Promise<void> {
   try {
-    const rawUrl = cleanEnv(process.env.TURSO_DATABASE_URL) ?? "";
-    const token = cleanEnv(process.env.TURSO_AUTH_TOKEN) ?? "";
-    const base = rawUrl.replace(/^libsql:/, "https:").replace(/\/+$/, "");
-    const res = await fetch(`${base}/v2/pipeline`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        requests: [
-          { type: "execute", stmt: { sql: "SELECT 1" } },
-          { type: "close" },
-        ],
-      }),
-    });
-    const text = (await res.text()).slice(0, 300);
-    console.error("[db-debug] status=%s body=%s", res.status, text);
+    const res = await fetch(url, init);
+    const text = (await res.text()).slice(0, 200);
+    console.error(
+      "[db-debug] %s status=%s server=%s type=%s body=%s",
+      label,
+      res.status,
+      res.headers.get("server"),
+      res.headers.get("content-type"),
+      text
+    );
   } catch (e) {
     console.error(
-      "[db-debug] fetch failed:",
+      "[db-debug] %s fetch failed: %s",
+      label,
       e instanceof Error ? e.message : String(e)
     );
   }
+}
+
+async function debugPipeline(): Promise<void> {
+  const rawUrl = cleanEnv(process.env.TURSO_DATABASE_URL) ?? "";
+  const token = cleanEnv(process.env.TURSO_AUTH_TOKEN) ?? "";
+  const base = rawUrl.replace(/^libsql:/, "https:").replace(/\/+$/, "");
+  const auth = { Authorization: `Bearer ${token}` };
+  const body = JSON.stringify({
+    requests: [
+      { type: "execute", stmt: { sql: "SELECT 1" } },
+      { type: "close" },
+    ],
+  });
+  const json = { "Content-Type": "application/json" };
+
+  await probe("health(no-auth)", `${base}/health`, { method: "GET" });
+  await probe("version(auth)", `${base}/version`, { method: "GET", headers: auth });
+  await probe("pipeline(no-auth)", `${base}/v2/pipeline`, {
+    method: "POST",
+    headers: json,
+    body,
+  });
+  await probe("pipeline(auth)", `${base}/v2/pipeline`, {
+    method: "POST",
+    headers: { ...auth, ...json },
+    body,
+  });
 }
 
 // دستورها را یکی‌یکی اجرا می‌کنیم (نه در یک batch/تراکنش)؛ همه idempotent هستند.
