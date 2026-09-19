@@ -7,12 +7,33 @@ declare global {
   var __panelSchemaReady: Promise<void> | undefined;
 }
 
+// فاصله، خط جدید یا علامت نقل‌قول اضافه (که هنگام کپی/پیست در Vercel ممکن است
+// همراه مقدار بیاید) باعث می‌شود Turso خطای ۴۰۰ برگرداند؛ پس پاکشان می‌کنیم.
+function cleanEnv(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const cleaned = value.trim().replace(/^["']+|["']+$/g, "").trim();
+  return cleaned || undefined;
+}
+
 function createConnection(): Client {
-  const url = process.env.TURSO_DATABASE_URL;
-  const authToken = process.env.TURSO_AUTH_TOKEN;
+  const url = cleanEnv(process.env.TURSO_DATABASE_URL);
+  const authToken = cleanEnv(process.env.TURSO_AUTH_TOKEN);
 
   if (!url) {
     throw new Error("TURSO_DATABASE_URL در متغیرهای محیطی تنظیم نشده است.");
+  }
+
+  // فقط برای عیب‌یابی در لاگ‌ها؛ خود توکن یا آدرس کامل چاپ نمی‌شود.
+  try {
+    console.log(
+      "[db] scheme=%s host=%s tokenLength=%s tokenLooksLikeJwt=%s",
+      url.split(":")[0],
+      new URL(url.replace(/^libsql:/, "https:")).host,
+      authToken ? authToken.length : 0,
+      authToken ? authToken.startsWith("eyJ") : false
+    );
+  } catch {
+    console.log("[db] TURSO_DATABASE_URL is not a valid URL");
   }
 
   // برای دیتابیس ریموت Turso (url با پیشوند libsql:// یا https://) این کلاینت
