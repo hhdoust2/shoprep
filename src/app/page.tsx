@@ -1,8 +1,16 @@
 import Link from "next/link";
+import { unstable_noStore as noStore } from "next/cache";
 import { db, ensureSchema } from "@/lib/db";
 import MessageBox from "@/components/MessageBox";
 
+// این صفحه هر بار باید وضعیت تازه‌ی کارت فروشگاه را از دیتابیس بخواند،
+// نه یک نسخه‌ی کش‌شده از اولین بار که ساخته شده.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default async function HomePage() {
+  // تضمین می‌کند این صفحه هرگز موقع build ساخته نشود و به دیتابیس وصل نشود.
+  noStore();
   await ensureSchema();
   const result = await db.execute("SELECT id FROM store_card WHERE id = 1");
   const hasCard = result.rows.length > 0;
