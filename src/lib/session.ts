@@ -1,7 +1,12 @@
 import { cookies } from "next/headers";
 
 const COOKIE_NAME = "panel_session";
+// کوکی نقش فقط برای نمایش منوی درست در رابط کاربری است (قابل خواندن توسط مرورگر)؛
+// هیچ دسترسی‌ای به آن وابسته نیست و اعتبارسنجی همیشه با کوکی امضاشده‌ی اصلی انجام می‌شود.
+const ROLE_COOKIE_NAME = "panel_role";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // ۱۲ ساعت
+
+export type Session = { role: "admin" } | { role: "store"; storeId: number };
 
 // از Web Crypto (crypto.subtle) استفاده می‌کنیم چون هم در Node.js (روت‌های api)
 // و هم در Edge Runtime (middleware) به‌صورت یکسان در دسترس است؛ اگر از ماژول
@@ -37,23 +42,40 @@ function fromHex(hex: string): Uint8Array {
   return new Uint8Array(bytes.map((b) => parseInt(b, 16)));
 }
 
-export async function createSessionValue(): Promise<string> {
+function markerFor(session: Session): string {
+  return session.role === "admin" ? "admin" : `store-${session.storeId}`;
+}
+
+function sessionFromMarker(marker: string): Session | null {
+  if (marker === "admin") return { role: "admin" };
+  const match = /^store-(\d+)$/.exec(marker);
+  if (!match) return null;
+  const storeId = Number(match[1]);
+  return Number.isSafeInteger(storeId) && storeId > 0
+    ? { role: "store", storeId }
+    : null;
+}
+
+export async function createSessionValue(session: Session): Promise<string> {
   const expires = Date.now() + SESSION_TTL_MS;
-  const payload = `ok.${expires}`;
+  const payload = `${markerFor(session)}.${expires}`;
   const key = await getKey();
   const enc = new TextEncoder();
   const signature = await crypto.subtle.sign("HMAC", key, enc.encode(payload));
   return `${payload}.${toHex(signature)}`;
 }
 
-export async function verifySessionValue(
+export async function verifySession(
   value: string | undefined | null
-): Promise<boolean> {
-  if (!value) return false;
+): Promise<Session | null> {
+  if (!value) return null;
 
   const parts = value.split(".");
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3) return null;
   const [marker, expiresStr, signatureHex] = parts;
+
+  const session = sessionFromMarker(marker);
+  if (!session) return null;
 
   try {
     const key = await getKey();
@@ -65,32 +87,47 @@ export async function verifySessionValue(
       fromHex(signatureHex) as BufferSource,
       enc.encode(payload)
     );
-    if (!valid) return false;
+    if (!valid) return null;
   } catch {
-    return false;
+    return null;
   }
 
   const expires = Number(expiresStr);
-  if (Number.isNaN(expires) || Date.now() > expires) return false;
+  if (Number.isNaN(expires) || Date.now() > expires) return null;
 
-  return marker === "ok";
+  return session;
 }
 
 export function getSessionCookieName(): string {
   return COOKIE_NAME;
 }
 
-export async function setSessionCookie(): Promise<void> {
-  const value = await createSessionValue();
+// فقط در route handler ها و server component ها (نه middleware) استفاده شود.
+export async function getSession(): Promise<Session | null> {
+  return verifySession(cookies().get(COOKIE_NAME)?.value);
+}
+
+export async function setSessionCookie(session: Session): Promise<void> {
+  const value = await createSessionValue(session);
+  const secure = process.env.NODE_ENV === "production";
+  const maxAge = SESSION_TTL_MS / 1000;
   cookies().set(COOKIE_NAME, value, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure,
     sameSite: "lax",
     path: "/",
-    maxAge: SESSION_TTL_MS / 1000,
+    maxAge,
+  });
+  cookies().set(ROLE_COOKIE_NAME, session.role, {
+    httpOnly: false,
+    secure,
+    sameSite: "lax",
+    path: "/",
+    maxAge,
   });
 }
 
 export function clearSessionCookie(): void {
   cookies().set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
+  cookies().set(ROLE_COOKIE_NAME, "", { path: "/", maxAge: 0 });
 }

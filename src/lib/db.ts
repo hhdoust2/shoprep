@@ -70,7 +70,8 @@ const SCHEMA_STATEMENTS = [
     suggestions TEXT NOT NULL,
     selected_reply TEXT,
     no_edit_flag INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    store_id INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS login_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -78,7 +79,86 @@ const SCHEMA_STATEMENTS = [
     locked_until TEXT
   )`,
   `INSERT OR IGNORE INTO login_state (id, failed_count, locked_until) VALUES (1, 0, NULL)`,
+  // --- چندفروشگاهی: هر فروشگاه یک حساب کاربری، کارت و تاریخچه‌ی جدا دارد ---
+  `CREATE TABLE IF NOT EXISTS stores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL DEFAULT '',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS store_cards (
+    store_id INTEGER PRIMARY KEY REFERENCES stores(id),
+    business_info TEXT NOT NULL,
+    products TEXT NOT NULL,
+    shipping_terms TEXT NOT NULL,
+    return_policy TEXT NOT NULL,
+    tone TEXT NOT NULL,
+    contact_info TEXT NOT NULL,
+    extra_notes TEXT NOT NULL,
+    locked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE TABLE IF NOT EXISTS login_attempts (
+    username TEXT PRIMARY KEY,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT
+  )`,
 ];
+
+// دیتابیس‌هایی که قبل از چندفروشگاهی ساخته شده‌اند: ستون store_id اضافه می‌شود و
+// کارت و تاریخچه‌ی فروشگاه قبلی (اگر باشد) به یک حساب با نام کاربری «store1» منتقل
+// می‌شود. آن حساب تا وقتی مدیر برایش رمز نگذاشته نمی‌تواند وارد شود.
+// همه‌ی مراحل idempotent هستند و اجرای دوباره‌شان بی‌ضرر است.
+async function migrateSchema(): Promise<void> {
+  // وجود ستون را با یک SELECT ساده می‌سنجیم (به‌جای PRAGMA) که روی هر نوع اتصال کار کند.
+  let hasStoreId = true;
+  try {
+    await db.execute("SELECT store_id FROM interaction_log LIMIT 1");
+  } catch {
+    hasStoreId = false;
+  }
+  if (!hasStoreId) {
+    try {
+      await db.execute("ALTER TABLE interaction_log ADD COLUMN store_id INTEGER");
+    } catch (err) {
+      // اگر هم‌زمان یک نمونه‌ی دیگر ستون را ساخته باشد، خطای تکراری بودن بی‌اهمیت است.
+      if (!/duplicate column/i.test(err instanceof Error ? err.message : String(err))) {
+        throw err;
+      }
+    }
+  }
+
+  await db.execute(
+    "CREATE INDEX IF NOT EXISTS idx_interaction_log_store_created ON interaction_log (store_id, created_at)"
+  );
+
+  await db.execute(
+    `INSERT INTO stores (name, username, password_hash, is_active)
+     SELECT 'فروشگاه اول', 'store1', '', 1
+     WHERE NOT EXISTS (SELECT 1 FROM stores)
+       AND EXISTS (SELECT 1 FROM store_card WHERE id = 1)`
+  );
+  await db.execute(
+    `INSERT OR IGNORE INTO store_cards (
+       store_id, business_info, products, shipping_terms, return_policy,
+       tone, contact_info, extra_notes, locked, created_at, updated_at
+     )
+     SELECT s.id, c.business_info, c.products, c.shipping_terms, c.return_policy,
+            c.tone, c.contact_info, c.extra_notes, c.locked, c.created_at, c.updated_at
+     FROM store_card c
+     JOIN stores s ON s.username = 'store1' AND s.password_hash = ''
+     WHERE c.id = 1`
+  );
+  await db.execute(
+    `UPDATE interaction_log
+     SET store_id = (SELECT id FROM stores WHERE username = 'store1' AND password_hash = '')
+     WHERE store_id IS NULL
+       AND EXISTS (SELECT 1 FROM stores WHERE username = 'store1' AND password_hash = '')`
+  );
+}
 
 // فقط برای عیب‌یابی: وقتی Turso خطا می‌دهد، چند درخواست ساده‌ی مستقیم می‌فرستیم
 // تا کد و متن جواب واقعی سرور در لاگ‌های Vercel دیده شود. هیچ توکنی چاپ نمی‌شود.
@@ -139,6 +219,7 @@ export function ensureSchema(): Promise<void> {
         for (const sql of SCHEMA_STATEMENTS) {
           await db.execute(sql);
         }
+        await migrateSchema();
       } catch (err) {
         global.__panelSchemaReady = undefined;
         console.error(
