@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { unstable_noStore as noStore } from "next/cache";
 import { db, ensureSchema } from "@/lib/db";
+import { getActiveStore } from "@/lib/auth";
 import MessageBox from "@/components/MessageBox";
 
 // این صفحه هر بار باید وضعیت تازه‌ی کارت فروشگاه را از دیتابیس بخواند،
@@ -11,13 +13,20 @@ export const revalidate = 0;
 export default async function HomePage() {
   // تضمین می‌کند این صفحه هرگز موقع build ساخته نشود و به دیتابیس وصل نشود.
   noStore();
+  const store = await getActiveStore();
+  if (!store) redirect("/login");
+
   await ensureSchema();
-  const result = await db.execute("SELECT id FROM store_card WHERE id = 1");
+  const result = await db.execute({
+    sql: "SELECT store_id FROM store_cards WHERE store_id = ?",
+    args: [store.id],
+  });
   const hasCard = result.rows.length > 0;
 
   if (!hasCard) {
     return (
       <div className="mx-auto max-w-md px-4 py-16 text-center">
+        <p className="mb-2 text-xs text-ink/50">فروشگاه: {store.name}</p>
         <h1 className="mb-2 text-lg font-semibold text-ink">
           هنوز کارت فروشگاه تکمیل نشده
         </h1>
@@ -34,5 +43,12 @@ export default async function HomePage() {
     );
   }
 
-  return <MessageBox />;
+  return (
+    <>
+      <p className="mx-auto max-w-2xl px-4 pt-6 text-xs text-ink/50">
+        فروشگاه: {store.name}
+      </p>
+      <MessageBox />
+    </>
+  );
 }
