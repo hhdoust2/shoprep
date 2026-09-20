@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, ensureSchema } from "@/lib/db";
-import { isDailyCapReached } from "@/lib/dailyLimit";
+import { getActiveStore } from "@/lib/auth";
+import { checkDailyCap } from "@/lib/dailyLimit";
 import { buildSystemPrompt, StoreCard } from "@/lib/prompt";
 import { generateSuggestions } from "@/lib/modelClient";
 
@@ -8,12 +9,23 @@ import { generateSuggestions } from "@/lib/modelClient";
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  const store = await getActiveStore();
+  if (!store) {
+    return NextResponse.json({ error: "ورود لازم است." }, { status: 401 });
+  }
   await ensureSchema();
 
   // بررسی سقف روزانه پیش از هرگونه تماس با مدل، برای کنترل هزینه
-  if (await isDailyCapReached()) {
+  const cap = await checkDailyCap(store.id);
+  if (cap === "store") {
     return NextResponse.json(
       { error: "سقف پیام روزانه پر شده است. فردا دوباره تلاش کنید." },
+      { status: 429 }
+    );
+  }
+  if (cap === "total") {
+    return NextResponse.json(
+      { error: "ظرفیت روزانه‌ی کل سرویس پر شده است. فردا دوباره تلاش کنید." },
       { status: 429 }
     );
   }
@@ -33,7 +45,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const cardResult = await db.execute("SELECT * FROM store_card WHERE id = 1");
+  const cardResult = await db.execute({
+    sql: "SELECT * FROM store_cards WHERE store_id = ?",
+    args: [store.id],
+  });
   const card = cardResult.rows[0] as unknown as StoreCard | undefined;
 
   if (!card) {
@@ -56,8 +71,8 @@ export async function POST(request: NextRequest) {
   }
 
   const insertResult = await db.execute({
-    sql: "INSERT INTO interaction_log (customer_message, suggestions) VALUES (?, ?)",
-    args: [message, JSON.stringify(suggestions)],
+    sql: "INSERT INTO interaction_log (store_id, customer_message, suggestions) VALUES (?, ?, ?)",
+    args: [store.id, message, JSON.stringify(suggestions)],
   });
 
   return NextResponse.json({

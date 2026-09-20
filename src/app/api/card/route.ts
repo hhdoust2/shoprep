@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, ensureSchema } from "@/lib/db";
+import { getActiveStore } from "@/lib/auth";
 
 const FIELDS = [
   "business_info",
@@ -12,17 +13,29 @@ const FIELDS = [
 ] as const;
 
 export async function GET() {
+  const store = await getActiveStore();
+  if (!store) {
+    return NextResponse.json({ error: "ورود لازم است." }, { status: 401 });
+  }
   await ensureSchema();
-  const result = await db.execute("SELECT * FROM store_card WHERE id = 1");
+  const result = await db.execute({
+    sql: "SELECT * FROM store_cards WHERE store_id = ?",
+    args: [store.id],
+  });
   return NextResponse.json({ card: result.rows[0] ?? null });
 }
 
 export async function POST(request: NextRequest) {
+  const store = await getActiveStore();
+  if (!store) {
+    return NextResponse.json({ error: "ورود لازم است." }, { status: 401 });
+  }
   await ensureSchema();
 
-  const existingResult = await db.execute(
-    "SELECT locked FROM store_card WHERE id = 1"
-  );
+  const existingResult = await db.execute({
+    sql: "SELECT locked FROM store_cards WHERE store_id = ?",
+    args: [store.id],
+  });
   const existing = existingResult.rows[0] as unknown as
     | { locked: number }
     | undefined;
@@ -54,13 +67,13 @@ export async function POST(request: NextRequest) {
 
   await db.execute({
     sql: `
-      INSERT INTO store_card (
-        id, business_info, products, shipping_terms, return_policy,
+      INSERT INTO store_cards (
+        store_id, business_info, products, shipping_terms, return_policy,
         tone, contact_info, extra_notes, locked, created_at, updated_at
       ) VALUES (
-        1, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now')
+        ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now')
       )
-      ON CONFLICT(id) DO UPDATE SET
+      ON CONFLICT(store_id) DO UPDATE SET
         business_info = excluded.business_info,
         products = excluded.products,
         shipping_terms = excluded.shipping_terms,
@@ -70,9 +83,9 @@ export async function POST(request: NextRequest) {
         extra_notes = excluded.extra_notes,
         locked = 1,
         updated_at = datetime('now')
-      WHERE store_card.locked = 0
+      WHERE store_cards.locked = 0
     `,
-    args: FIELDS.map((f) => body[f] as string),
+    args: [store.id, ...FIELDS.map((f) => body[f] as string)],
   });
 
   return NextResponse.json({ ok: true });

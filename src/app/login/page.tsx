@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -17,11 +18,11 @@ export default function LoginPage() {
       const res = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "خطای نامشخص");
-      router.push("/");
+      router.push(data.role === "admin" ? "/admin" : "/");
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "خطای نامشخص");
@@ -29,6 +30,9 @@ export default function LoginPage() {
       setLoading(false);
     }
   }
+
+  const inputClass =
+    "w-full rounded-lg border border-line bg-white p-3 text-sm text-ink focus:border-accent focus:outline-none";
 
   return (
     <div className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-4">
@@ -38,16 +42,27 @@ export default function LoginPage() {
       </h1>
       <form onSubmit={handleSubmit} className="space-y-4">
         <input
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="نام کاربری"
+          autoFocus
+          autoComplete="username"
+          autoCapitalize="none"
+          dir="ltr"
+          className={inputClass}
+        />
+        <input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="رمز عبور"
-          autoFocus
-          className="w-full rounded-lg border border-line bg-white p-3 text-sm text-ink focus:border-accent focus:outline-none"
+          autoComplete="current-password"
+          className={inputClass}
         />
         <button
           type="submit"
-          disabled={loading || !password}
+          disabled={loading || !username || !password}
           className="w-full rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark disabled:opacity-50"
         >
           {loading ? "در حال ورود..." : "ورود"}
