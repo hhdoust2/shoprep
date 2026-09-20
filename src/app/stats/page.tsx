@@ -1,5 +1,7 @@
+import { redirect } from "next/navigation";
 import { unstable_noStore as noStore } from "next/cache";
 import { db, ensureSchema } from "@/lib/db";
+import { getActiveStore } from "@/lib/auth";
 import { getDailyCap, getTodayCount } from "@/lib/dailyLimit";
 
 // آمار باید همیشه تازه از دیتابیس خوانده شود و هرگز موقع build ساخته نشود.
@@ -66,39 +68,46 @@ function StatCard({
 
 export default async function StatsPage() {
   noStore();
+  const store = await getActiveStore();
+  if (!store) redirect("/login");
   await ensureSchema();
 
-  const totalsResult = await db.execute(
-    `SELECT
+  const totalsResult = await db.execute({
+    sql: `SELECT
        COUNT(*) AS generated,
        SUM(CASE WHEN selected_reply IS NOT NULL THEN 1 ELSE 0 END) AS copied,
        SUM(no_edit_flag) AS unedited
-     FROM interaction_log`
-  );
+     FROM interaction_log
+     WHERE store_id = ?`,
+    args: [store.id],
+  });
   const totalsRow = totalsResult.rows[0] as unknown as Totals | undefined;
   const generated = toNumber(totalsRow?.generated);
   const copied = toNumber(totalsRow?.copied);
   const unedited = toNumber(totalsRow?.unedited);
 
-  const daysResult = await db.execute(
-    `SELECT
+  const daysResult = await db.execute({
+    sql: `SELECT
        date(created_at) AS day,
        COUNT(*) AS generated,
        SUM(CASE WHEN selected_reply IS NOT NULL THEN 1 ELSE 0 END) AS copied,
        SUM(no_edit_flag) AS unedited
      FROM interaction_log
+     WHERE store_id = ?
      GROUP BY date(created_at)
      ORDER BY day DESC
-     LIMIT 14`
-  );
+     LIMIT 14`,
+    args: [store.id],
+  });
   const days = daysResult.rows as unknown as DayRow[];
 
-  const todayCount = await getTodayCount();
+  const todayCount = await getTodayCount(store.id);
   const cap = getDailyCap();
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10">
       <h1 className="mb-1 text-xl font-semibold text-ink">نتایج پایلوت</h1>
+      <p className="mb-1 text-xs text-ink/50">فروشگاه: {store.name}</p>
       <p className="mb-6 text-sm text-ink/60">
         شاخص اصلی، درصد پاسخ‌هایی است که فروشنده دقیقاً همان‌طور که مدل نوشته
         کپی کرده و ویرایش نکرده است.
