@@ -4,6 +4,9 @@ import { isDailyCapReached } from "@/lib/dailyLimit";
 import { buildSystemPrompt, StoreCard } from "@/lib/prompt";
 import { generateSuggestions } from "@/lib/modelClient";
 
+// اجازه‌ی زمان بیشتر برای تلاش با مدل‌های جایگزین (سقف پلن رایگان Vercel).
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
   await ensureSchema();
 
