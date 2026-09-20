@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySessionValue, getSessionCookieName } from "@/lib/session";
+import { verifySession, getSessionCookieName } from "@/lib/session";
 
 export const config = {
   matcher: [
@@ -8,17 +8,41 @@ export const config = {
 };
 
 export async function middleware(request: NextRequest) {
-  const cookieValue = request.cookies.get(getSessionCookieName())?.value;
-  const isValid = await verifySessionValue(cookieValue);
+  const session = await verifySession(
+    request.cookies.get(getSessionCookieName())?.value
+  );
+  const path = request.nextUrl.pathname;
+  const isApi = path.startsWith("/api/");
 
-  if (isValid) {
-    return NextResponse.next();
+  if (!session) {
+    if (isApi) {
+      return NextResponse.json({ error: "ورود لازم است." }, { status: 401 });
+    }
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  if (request.nextUrl.pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "ورود لازم است." }, { status: 401 });
+  const isAdminArea =
+    path === "/admin" || path.startsWith("/admin/") || path.startsWith("/api/admin/");
+  const isShared = path === "/api/logout";
+
+  if (session.role === "admin") {
+    // مدیر فقط بخش مدیریت را می‌بیند؛ صفحه‌های فروشگاه مخصوص حساب هر فروشگاه است.
+    if (isAdminArea || isShared) return NextResponse.next();
+    if (isApi) {
+      return NextResponse.json(
+        { error: "این بخش مخصوص حساب فروشگاه است." },
+        { status: 403 }
+      );
+    }
+    return NextResponse.redirect(new URL("/admin", request.url));
   }
 
-  const loginUrl = new URL("/login", request.url);
-  return NextResponse.redirect(loginUrl);
+  if (isAdminArea) {
+    if (isApi) {
+      return NextResponse.json({ error: "دسترسی مجاز نیست." }, { status: 403 });
+    }
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+
+  return NextResponse.next();
 }
